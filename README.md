@@ -1,176 +1,274 @@
-# AI Org Structure Analyzer
+# ОргАналитик AI
 
-HackAlem MVP for extracting organizational units and their functions from
-BEFORE and AFTER organizational documents, with traceable original evidence.
+AI-сервис для анализа организационной структуры и функций до и после реорганизации.
+HackAlem MVP: два документа, сравнение изменений и проверяемые ссылки на исходный текст.
 
-## Current functionality
+## Проблема
 
-- Upload one BEFORE and one AFTER PDF, DOCX, or XLSX (20 MB maximum each).
-- Click **Провести анализ** to parse both documents, extract units/functions,
-  and automatically compare changes and potential risks with visible progress.
-- View units, parent names when explicit, function counts, expandable functions,
-  and source filenames, pages/locators, sections, and original extracted text.
-- Results live only in Streamlit session state. Changing an upload clears them.
-  Ordinary UI reruns do not call the API. Successful extraction and comparison
-  are cached separately for up to three document pairs in the current session.
-  Repeated analysis reuses these results without additional API calls.
-  Keys include both content hashes, original filenames, model, explicit versions
-  and processing-source fingerprints. Renaming files invalidates the cache to
-  preserve original filenames in evidence. Failures are not cached; comparison
-  retries reuse successful extraction. A new session/server restart clears cache.
-- A failed AI run leaves the source previews available, without presenting a
-  partially processed document pair as a complete extraction.
+Ручное сравнение организационных документов требует сопоставлять подразделения,
+обязанности и формулировки из разных редакций. При реорганизации могут возникать
+потери функций, дублирование, пересечение ответственности и потенциальные конфликты
+интересов. Одного текстового diff недостаточно для интерпретации таких изменений.
 
-## Parsing and source evidence
+## Решение
 
-PDF pages split at line-start dotted section markers such as 3.4., 5.3.2.,
-and 9.21. Preamble text is retained. Concatenating a page's chunks reproduces
-all of its extracted text, including whitespace. A page without detectable
-markers remains one chunk. IDs are deterministic source positions such as
-before_p006_003 and are scoped to the current analysis.
+Документы ДО/ПОСЛЕ → парсинг → извлечение организационной структуры → анализ функций
+и ответственности → сравнение → проверка источников → потенциальные риски и рекомендации.
 
-DOCX retains non-empty body paragraphs with physical paragraph indices.
-XLSX retains non-empty rows with sheet names, row numbers and column letters;
-formulas remain source text.
+**«AI интерпретирует — система проверяет источники.»**
 
-The AI returns structured unit/function interpretations and chunk IDs.
-Python discards references not supplied in the current API batch, then resolves
-them against the original document's SourceChunk objects. Units/functions with
-no valid references are discarded. Source quotations, pages, and locators shown
-in the UI always come from those original chunks, never from model output.
-Reference validation establishes that evidence exists, not that the AI's
-interpretation is correct. Review the cited text.
+Каждый отображаемый содержательный вывод связан с исходными фрагментами документов.
+Проверка ссылок выполняется при извлечении и сравнении. Она подтверждает наличие
+источника, но не доказывает, что интерпретация AI верна: окончательное решение принимает человек.
 
-## AI extraction (H2.3)
+## Возможности
 
-Uses the official OpenAI Python SDK, Responses API responses.parse, and
-Pydantic Structured Outputs. Default model: gpt-4.1-mini, configurable with
-OPENAI_MODEL. Each document is processed independently in two stages.
+- Загрузка документов ДО/ПОСЛЕ в PDF, DOCX и XLSX, до 20 МБ каждый.
+- Извлечение структурных подразделений, поддержанных источником наименований и алиасов.
+- Извлечение функций с привязкой к подтверждённым подразделениям.
+- Сравнение структуры: сохранение, создание, удаление и преобразование подразделений.
+- Анализ изменений и перераспределения ответственности по исходному тексту.
+- Гипотезы о возможной потере функций, дублировании и конфликтах интересов; рекомендации по проверке.
+- Просмотр оригинальных фрагментов, имени документа, страницы, пункта или другого указателя.
+- Русский интерфейс, единый запуск анализа и сравнения с этапами прогресса.
+- Раздельный кэш успешного извлечения и сравнения в текущей сессии.
 
-**Stage A — structure only.** All source batches are processed before Stage B.
-The schema contains units and structural/alias evidence, with no functions.
-Existing structural validation and alias normalization produce a complete
-registry with ID, canonical_name, aliases, parent and source_refs.
-Roles, directors and working groups are not units merely because they have
-subordinates. Title-like names require an explicit structural naming definition.
-Aliases require an explicit equivalence in the source.
+## Архитектура
 
-**Stage B — functions only.** Every source batch is read again with the complete
-validated registry (IDs, canonical names, aliases and parents). This schema
-cannot create units. Each function chooses an existing owner_unit_id and cites
-source_chunk_ids. Ownership may be a direct assignment, an abbreviation marker
-on a duty, a section dedicated to a unit, or a responsibility explicitly assigned
-to that unit through its director/manager. Roles remain source context, not units.
-The model marks ambiguous ownership or unsupported interpretations for rejection.
+```mermaid
+flowchart TD
+    User["Пользователь"] --> UI["Streamlit UI"]
+    subgraph Code["Детерминированный Python-код"]
+        UI --> Parser["Парсеры PDF / DOCX / XLSX"]
+        Parser --> Chunks["SourceChunk: текст и метаданные"]
+        Chunks --> Structure["Извлечение структуры"]
+        Structure --> Functions["Извлечение функций"]
+        Functions --> Compare["Сравнение структуры и ответственности"]
+        Chunks --> Compare
+        Compare --> Validator["Валидация ссылок на источники"]
+        Validator --> Findings["Выводы и рекомендации с источниками"]
+        Findings --> UI
+        UI <--> Cache["Кэш и результаты в session_state"]
+    end
+    subgraph AI["AI inference — внешний сервис"]
+        API["OpenAI Responses API / Structured Outputs"]
+    end
+    Structure <--> API
+    Functions <--> API
+    Compare <--> API
+```
 
-Python rejects unknown owners, empty evidence, ambiguous/unsupported candidates,
-and functions containing any unknown or unsent evidence ID. It resolves source
-references against original chunks. Semantic support and ownership interpretation
-are assessed by the model, not proven by deterministic ID validation.
-There is no exact-substring or narrow role/heading regex filter on Stage B output:
-a specific responsibility or faithful concise formulation may come from a larger
-chunk. The UI always displays the untouched source chunk as evidence.
+Узлы извлечения и сравнения — Python-оркестраторы: смысловые ответы формирует OpenAI,
+а код задаёт схему, проверяет владельцев и ссылки. Валидация также выполняется после
+каждого этапа извлечения, до передачи данных дальше. Подробности: [архитектура](docs/architecture.md).
 
-The model is instructed to consolidate equivalent duties conservatively. Python
-also merges matching normalized wording within one owner (list labels, case,
-whitespace and punctuation), preserving all references. Different owners, scopes,
-word order and negations are not merged automatically. Semantic paraphrases
-across batches can still remain separate.
+## Как работает AI
 
-Source batches are at most 24,000 UTF-8 bytes with one excerpt of overlap.
-Stage B adds a registry limited to 24,000 bytes plus small JSON overhead; an
-oversized registry causes an explicit error rather than silently dropping units.
-Oversized source chunks are sliced, retaining their original IDs for retrieval.
-Each stage uses store=False, an 8,000-token output cap, a 90-second request timeout
-and at most one SDK retry. No validated units means Stage B is skipped. Refusals,
-incomplete output or API errors reject the run instead of showing partial success.
-Two passes generally mean twice as many extraction requests as H2.2.
-Old session extraction results are cleared when the policy changes to H2.3.
+| Детерминированный код | AI |
+| --- | --- |
+| Читает файлы и выделяет текст | Интерпретирует организационную структуру |
+| Сохраняет метаданные и распознаёт номера пунктов | Выделяет обязанности и их владельцев |
+| Формирует порции контекста и проверяет схемы ответов | Семантически сравнивает ответственность |
+| Проверяет существование ссылок и допустимые подразделения | Формулирует гипотезы о рисках и рекомендации |
+| Обслуживает кэш, состояние и интерфейс | Возвращает ссылки на предоставленные источники |
 
-## H3 comparison
+AI **не является источником доказательств**. Сначала для каждого документа извлекается
+структура, затем функции с использованием полного проверенного реестра подразделений.
+Должности не становятся подразделениями автоматически; обязанности руководителя могут
+относиться к подразделению при явной связи в источнике.
 
-Comparison starts automatically after extraction. H3 compares validated units and
-original source chunks directly, so incomplete H2 function lists do not block it.
-Two requests cover structure/responsibility changes and optional AFTER risks;
-a third request rechecks loss candidates across all AFTER units when necessary.
-The tabs OVERVIEW, FUNCTION CHANGES and FINDINGS display changes, cautious risk
-hypotheses, confidence and expandable original evidence. Unknown owners and
-unsupported evidence are rejected. A failed optional request preserves the other
-results and all parsed/extracted data. Ordinary UI reruns do not repeat requests.
+Сравнение использует подразделения и исходные фрагменты напрямую, поэтому не ограничено
+списком извлечённых функций. Кандидаты на потерю проходят дополнительную проверку переноса
+на другие подразделения ПОСЛЕ. Анализ дублирования и конфликтов использует документ ПОСЛЕ.
 
-Each side uses up to 65 KB of source context, prioritizing unit references,
-name/alias mentions, nearby chunks and related sections for large documents.
-Potential-loss hypotheses are hidden if AFTER coverage is incomplete or the
-relocation recheck fails. Findings are interpretations requiring review, not
-proof of loss or legal conclusions. No export is implemented.
+## Traceability / Explainability
 
-## Installation and key setup
+`SourceChunk` хранит `chunk_id`, `document_id`, `filename`, `page`, `section`, `locator`, `text`.
+Например, `before_p006_003` — детерминированный идентификатор позиции фрагмента, который
+разрешается в контексте конкретного документа. Идентификатор документа учитывает сторону,
+имя файла и содержимое; один `chunk_id` не является глобальным ID всех загрузок.
 
-Python 3.10 or newer:
+Подразделения, функции и результаты сравнения ссылаются на эти фрагменты. Неизвестные
+ссылки отклоняются; объекты без достаточных допустимых подтверждений не показываются
+как проверенные результаты. Цитата в «Показать подтверждение» берётся из сохранённого
+текста парсера, а не генерируется AI. Для DOCX/XLSX вместо номера страницы используется
+абзац либо лист и строка. Номер пункта может отсутствовать.
 
-~~~powershell
+## Tech Stack
+
+- Python 3.10+; локальные проверки выполнены в Python 3.12.
+- Streamlit — интерфейс и состояние сессии.
+- PyMuPDF — PDF; python-docx — DOCX; openpyxl — XLSX.
+- OpenAI Python SDK — Responses API и Structured Outputs.
+- Pydantic — схемы ответов; dataclasses — внутренние модели.
+- python-dotenv — чтение `.env`.
+- unittest, unittest.mock и Streamlit AppTest — автоматические проверки.
+
+Базы данных, векторного хранилища, embeddings, OCR и аутентификации нет.
+
+## Структура проекта
+
+```text
+app.py                         # единый пользовательский сценарий
+requirements.txt               # зависимости с диапазонами версий
+.env.example                   # шаблон без ключа
+.gitignore
+.streamlit/config.toml         # тема и лимит загрузки
+src/
+  config.py                    # настройки из окружения и .env
+  models.py                    # документы, фрагменты, результаты
+  ui_common.py                 # общие элементы UI и источники
+  comparison_ui.py             # вкладки результатов
+  parsers/
+    parser_factory.py          # проверка загрузки и выбор парсера
+    pdf_parser.py
+    docx_parser.py
+    xlsx_parser.py
+  services/
+    chunking.py                # фрагменты и номера пунктов
+    extraction.py              # структура, затем функции
+    comparison.py              # сравнение, риски, проверка потерь
+    pipeline.py                # последовательность и кэш
+tests/                        # unittest и AppTest
+docs/
+   architecture.md
+   demo.md
+```
+
+## Быстрый запуск
+
+Нужны Python 3.10+, доступ к сети для установки пакетов и OpenAI API,
+а также действующий API-ключ с доступом к выбранной модели. Команды выполняются
+из корня репозитория. Реальный анализ отправляет текст в OpenAI и может быть платным.
+
+Windows PowerShell:
+
+```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+# Только если .env ещё не существует:
 Copy-Item .env.example .env
-~~~
+```
 
-Create .env only if you do not already have one. Edit it locally:
+В локальном `.env` укажите собственный ключ (не коммитьте его):
 
-~~~dotenv
+```dotenv
 OPENAI_API_KEY=your-key-here
 OPENAI_MODEL=gpt-4.1-mini
-~~~
+```
 
-The app reads the repository .env on each explicit run. Environment variables
-take precedence. A missing/blank key shows a clear UI error without calling
-OpenAI. Never commit .env or paste a real key into code. Analyze sends extracted
-document text to OpenAI and may incur API charges.
-
-## How to run
-
-From this repository:
-
-~~~powershell
+```powershell
 .\.venv\Scripts\python.exe -m streamlit run app.py
-~~~
+```
 
-On macOS/Linux, use .venv/bin/python instead. Open the URL printed by Streamlit.
+macOS/Linux:
 
-For the isolated Python 3.12 environment used to verify H2 on this machine:
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+# Только если .env ещё не существует:
+cp .env.example .env
+# Заполните .env своим ключом перед анализом.
+.venv/bin/python -m streamlit run app.py
+```
 
-~~~powershell
-.\.venv-h2\Scripts\python.exe -m streamlit run app.py
-~~~
+Откройте адрес, выведенный Streamlit, обычно `http://localhost:8501`.
+Активация виртуального окружения не требуется: команды используют его Python напрямую.
 
-The existing .venv was preserved; .venv-h2 is local and Git-ignored.
+## Переменные окружения
 
-## Tests
+| Переменная | Назначение | Значение по умолчанию |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | Ключ доступа к OpenAI; необходим для запуска анализа | Нет |
+| `OPENAI_MODEL` | Модель с поддержкой используемых структурированных ответов | `gpt-4.1-mini` |
 
-~~~powershell
-.\.venv-h2\Scripts\python.exe -m unittest discover -s tests -v
-~~~
+Переменные процесса имеют приоритет над `.env` в корне репозитория. Настройки читаются
+при явном запуске анализа. При отсутствии ключа интерфейс сообщает об ошибке настройки.
 
-Tests preserve H1 coverage and use generated fixtures and mocked OpenAI calls.
-They do not spend API credits. Real revision 8/9 extraction is not certified by
-these tests.
+## Поддерживаемые форматы
 
-## Limitations
+| Формат | Что извлекается | Ограничения |
+| --- | --- | --- |
+| PDF | Текст страниц с разделением по распознанным номерам пунктов | Нет OCR; PDF с паролем не поддерживается; порядок текста зависит от вёрстки |
+| DOCX | Непустые абзацы тела документа с физическими индексами | Таблицы, колонтитулы, текстовые поля и автоматические номера списков не извлекаются |
+| XLSX | Непустые строки, лист, номер строки и буквы столбцов | Формулы сохраняются как текст, не вычисляются |
 
-No OCR; scanned pages without embedded text are skipped. PDF reading order and
-section recognition depend on text layout; section continuations across pages
-remain separate. DOCX tables, headers, footers, text boxes and automatic list
-numbering are not extracted. XLSX formulas are not calculated.
-Long sections may be fragmented across batches; limited overlap can miss
-distant unit/function relationships. Deduplication does not resolve semantic
-paraphrases or unrecognized name/parent variations. Alias definitions in other
-formats may be missed. Model-based ownership may still omit duties or attach an
-existing but irrelevant source reference. Review the original evidence. No live
-revision 8/9 quality claim is established by mocked tests.
-H3 comparison may miss responsibilities outside selected context or misinterpret
-semantic equivalence. Confidence is model-reported, not calibrated. No embeddings,
-reports or persistent database are implemented. Use trusted local hackathon documents.
+Пустые, повреждённые, неподдерживаемые файлы и файлы свыше 20 МБ отклоняются.
+В смешанном PDF страницы без доступного текстового слоя не анализируются.
 
-Official references:
-- https://developers.openai.com/api/docs/guides/structured-outputs
-- https://developers.openai.com/api/docs/models/gpt-4.1-mini
+## Сценарий проверки
 
+1. Запустите приложение.
+2. Загрузите исходный документ в «До реорганизации».
+3. Загрузите новую редакцию в «После реорганизации».
+4. Нажмите «Провести анализ».
+5. Дождитесь этапов чтения, определения структуры и функций, сравнения, формирования рисков и рекомендаций.
+6. В «Результаты сравнения» изучите вкладку «ОБЗОР ИЗМЕНЕНИЙ».
+7. Откройте «ИЗМЕНЕНИЯ ФУНКЦИЙ» и проверьте перераспределение ответственности.
+8. На вкладке «РИСКИ И РЕКОМЕНДАЦИИ» изучите карточки найденных гипотез, если они есть.
+9. Раскройте «Показать подтверждение».
+10. Сверьте документ, страницу/локатор, пункт и исходный фрагмент с выводом.
+
+Повторите запуск с той же парой в той же сессии: завершённые этапы берутся из кэша
+без повторных запросов. Ключ включает хеши обоих файлов, исходные имена, модель,
+версии обработки и отпечатки файлов реализации. Хранятся до трёх пар на каждый кэш;
+переименование файла тоже вызывает новый анализ, чтобы не перепутать источники.
+Обычные rerun интерфейса не повторяют запросы. Ошибки не кэшируются; после сбоя
+сравнения успешное извлечение сохраняется и используется при повторной попытке.
+
+[Сценарий демонстрации на 3 минуты](docs/demo.md).
+
+## Тестирование
+
+Windows:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+macOS/Linux:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Финальный локальный прогон 23.09.2026: **81 тест, все прошли**, Python 3.12,
+существующее изолированное окружение `.venv-h2`. Проверены парсеры на генерируемых
+PDF/DOCX/XLSX, проверки источников, роли и алиасы, принадлежность функций, сравнение,
+обработка ошибок, русский UI, кэш и сохранение результатов при rerun.
+OpenAI в тестах замокан: API-кредиты не расходуются. Эти тесты не доказывают качество
+реального анализа редакций 8/9 и не измеряют его скорость.
+
+Дополнительно проверены импорт `app.py`, запуск Streamlit и ответ `ok` на health endpoint,
+соответствие установленных версий `requirements.txt` и `pip check` без конфликтов.
+Локальная среда: Python 3.12.14, Streamlit 1.64.0, PyMuPDF 1.28.2, python-docx 1.2.0,
+openpyxl 3.1.5, openai 2.54.0, python-dotenv 1.2.3, Pydantic 2.13.5.
+Чистая установка в новое окружение и запуск на macOS/Linux в этой проверке не выполнялись.
+Команды сверены с путями и точкой входа проекта; Mermaid проверен по структуре текста,
+без отдельного рендерера диаграмм. Реальные запросы OpenAI в финальной QA не выполнялись.
+
+## Ограничения
+
+- Выводы AI требуют проверки человеком; вероятные риски — гипотезы, не юридические заключения.
+- Первый анализ может занимать несколько минут. Фиксированное время ответа не гарантируется.
+- Кэш локален для сессии и теряется при новой сессии или перезапуске сервера; общего дискового кэша нет.
+- Точность зависит от структуры, качества текста и однозначности описания ответственности.
+- Извлечение выполняется порциями контекста; дальние связи и семантические дубликаты могут быть пропущены.
+- Для больших документов сравнение использует выбранные исходные фрагменты — до 65 000 UTF-8 байт на сторону.
+  При неполном покрытии ПОСЛЕ выводы о потере скрываются. Чрезмерный контекст может привести к отказу обработки.
+- Нет экспорта отчётов, БД и управления пользователями. MVP рассчитан на доверенные локальные документы.
+- Зависимости заданы диапазонами, без lock-файла; побитовая воспроизводимость окружения не гарантируется.
+
+## Безопасность
+
+Ключ хранится в переменных окружения или локальном `.env`, который игнорируется Git.
+`.env.example` содержит пустой `OPENAI_API_KEY`; реальный ключ в репозиторий добавлять нельзя.
+Проверка текущих отслеживаемых файлов на распространённые признаки ключей и секретов
+не выявила совпадений; это не полный аудит истории Git или безопасности приложения.
+
+Для inference исходный текст и организационные данные передаются в OpenAI; используйте
+документы, которые разрешено обрабатывать таким способом. Вызовы используют `store=False`;
+это не заявление о полной политике хранения внешнего сервиса. Кэш и результаты находятся
+в памяти сессии. Ссылки доказательств проверяются по распарсенным источникам, а показываемый
+текст берётся из них напрямую. Аутентификация не реализована: не публикуйте локальный MVP
+как открытый многопользовательский сервис без отдельной доработки безопасности.
