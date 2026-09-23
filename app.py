@@ -4,11 +4,14 @@ from src.config import ConfigurationError, load_settings
 from src.models import Document, ExtractionResult
 from src.parsers.parser_factory import DocumentParseError, parse_document
 from src.services.extraction import ExtractionError, extract_document, resolve_refs
+from src.services.comparison import compare_documents
+from src.comparison_ui import show_comparison
 
 
 def clear_results() -> None:
     st.session_state.pop("documents", None)
     st.session_state.pop("extractions", None)
+    st.session_state.pop("comparison", None)
 
 
 def show_preview(document: Document) -> None:
@@ -68,6 +71,7 @@ def main() -> None:
     st.set_page_config(page_title="AI Org Structure Analyzer", layout="wide")
     if st.session_state.get("extraction_policy") != "h2.3":
         st.session_state.pop("extractions", None)
+        st.session_state.pop("comparison", None)
         st.session_state["extraction_policy"] = "h2.3"
     st.title("AI Org Structure Analyzer")
     st.caption("H2.3: validate organizational structure, then extract functions for those units.")
@@ -131,6 +135,24 @@ def main() -> None:
             if results := st.session_state.get("extractions"):
                 show_extraction(documents["AFTER"], results["AFTER"])
             show_preview(documents["AFTER"])
+
+        if results := st.session_state.get("extractions"):
+            st.divider()
+            st.subheader("BEFORE → AFTER comparison")
+            st.caption("Сравнение читает исходные фрагменты и не зависит от полноты списка функций H2.")
+            if st.button("Compare documents", type="primary"):
+                st.session_state.pop("comparison", None)
+                try:
+                    with st.spinner("Сравнение структуры, обязанностей и потенциальных рисков..."):
+                        st.session_state["comparison"] = compare_documents(
+                            documents["BEFORE"], documents["AFTER"],
+                            results["BEFORE"], results["AFTER"], load_settings(),
+                        )
+                except ConfigurationError as exc:
+                    st.error(str(exc))
+            if comparison := st.session_state.get("comparison"):
+                show_comparison(comparison, documents["BEFORE"], documents["AFTER"],
+                                results["BEFORE"], results["AFTER"])
 
 
 if __name__ == "__main__":

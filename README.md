@@ -81,6 +81,23 @@ incomplete output or API errors reject the run instead of showing partial succes
 Two passes generally mean twice as many extraction requests as H2.2.
 Old session extraction results are cleared when the policy changes to H2.3.
 
+## H3 comparison
+
+After extraction, click **Compare documents**. H3 compares validated units and
+original source chunks directly, so incomplete H2 function lists do not block it.
+Two requests cover structure/responsibility changes and optional AFTER risks;
+a third request rechecks loss candidates across all AFTER units when necessary.
+The tabs OVERVIEW, FUNCTION CHANGES and FINDINGS display changes, cautious risk
+hypotheses, confidence and expandable original evidence. Unknown owners and
+unsupported evidence are rejected. A failed optional request preserves the other
+results and all parsed/extracted data. Ordinary UI reruns do not repeat requests.
+
+Each side uses up to 65 KB of source context, prioritizing unit references,
+name/alias mentions, nearby chunks and related sections for large documents.
+Potential-loss hypotheses are hidden if AFTER coverage is incomplete or the
+relocation recheck fails. Findings are interpretations requiring review, not
+proof of loss or legal conclusions. No export is implemented.
+
 ## Installation and key setup
 
 Python 3.10 or newer:
@@ -143,8 +160,9 @@ paraphrases or unrecognized name/parent variations. Alias definitions in other
 formats may be missed. Model-based ownership may still omit duties or attach an
 existing but irrelevant source reference. Review the original evidence. No live
 revision 8/9 quality claim is established by mocked tests.
-No BEFORE/AFTER matching, findings, recommendations, embeddings, reports or
-persistent database are implemented. Use trusted local hackathon documents.
+H3 comparison may miss responsibilities outside selected context or misinterpret
+semantic equivalence. Confidence is model-reported, not calibrated. No embeddings,
+reports or persistent database are implemented. Use trusted local hackathon documents.
 
 Official references:
 - https://developers.openai.com/api/docs/guides/structured-outputs
