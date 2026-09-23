@@ -4,5 +4,5 @@
 __pycache__/
 *.pyc
 .venv/
+.venv-h2/
 .pytest_cache/
-

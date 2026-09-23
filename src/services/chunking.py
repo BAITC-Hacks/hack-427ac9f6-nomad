@@ -3,7 +3,9 @@ import re
 from src.models import Document, SourceChunk
 
 # Only explicit dotted numbering at the start of a line; no inferred sections.
-SECTION_PATTERN = re.compile(r"^\s*(\d+(?:\.\d+)+)\.?\s+\S", re.MULTILINE)
+SECTION_PATTERN = re.compile(
+    r"^[ \t]*(\d+(?:\.\d+)+)\.?(?=[ \t]|\r?$)", re.MULTILINE
+)
 
 
 def detect_section(text: str) -> str | None:
@@ -29,3 +31,21 @@ def make_chunk(
         text=text,
     )
 
+
+def split_pdf_page(document: Document, page: int, text: str) -> list[SourceChunk]:
+    """Split at explicit line-start markers; concatenation preserves every character."""
+    if not text.strip():
+        return []
+    starts = [match.start() for match in SECTION_PATTERN.finditer(text)]
+    boundaries = sorted({0, *starts, len(text)})
+    # Keep whitespace before the first heading attached to it, not as an empty chunk.
+    if len(boundaries) > 2 and not text[:boundaries[1]].strip():
+        boundaries.pop(1)
+    chunks = []
+    for index, (start, end) in enumerate(zip(boundaries, boundaries[1:]), start=1):
+        chunk = make_chunk(
+            document, f"p{page:03d}_{index:03d}",
+            f"Page {page}, characters {start + 1}-{end}", text[start:end], page,
+        )
+        chunks.append(chunk)
+    return chunks

@@ -1,7 +1,7 @@
 import pymupdf
 
 from src.models import Document, SourceChunk
-from src.services.chunking import make_chunk
+from src.services.chunking import split_pdf_page
 
 
 def parse_pdf(data: bytes, document: Document) -> list[SourceChunk]:
@@ -11,10 +11,5 @@ def parse_pdf(data: bytes, document: Document) -> list[SourceChunk]:
             raise ValueError("Password-protected PDFs are not supported.")
         for page_number, page in enumerate(pdf, start=1):
             text = page.get_text("text")
-            if text.strip():
-                chunks.append(make_chunk(
-                    document, f"p{page_number:03d}_001",
-                    f"Page {page_number}", text, page=page_number,
-                ))
+            chunks.extend(split_pdf_page(document, page_number, text))
     return chunks
-
