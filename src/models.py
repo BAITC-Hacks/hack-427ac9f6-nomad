@@ -105,6 +105,12 @@ class Finding(ComparisonModel):
 @dataclass
 class ComparisonResult:
     completed: bool = False
+    structure_complete: bool = False
+    before_units_total: int = 0
+    before_units_covered: int = 0
+    after_units_total: int = 0
+    after_units_covered: int = 0
+    diagnostics: list[dict[str, str]] = field(default_factory=list)
     unit_changes: list[UnitChange] = field(default_factory=list)
     responsibility_changes: list[ResponsibilityChange] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)

@@ -206,8 +206,8 @@ class H2AppTests(unittest.TestCase):
             chunks = payload if isinstance(payload, list) else payload["chunks"]
             return staged_response(output([chunks[0]["chunk_id"]]))(**kwargs)
         client.responses.parse.side_effect = respond
-        from src.models import ComparisonResult
-        with patch("src.services.comparison.compare_documents", return_value=ComparisonResult(completed=True)) as compare, patch("streamlit.file_uploader", return_value=upload):
+        from test_p0 import successful_comparison
+        with patch("src.services.comparison.compare_documents", side_effect=successful_comparison) as compare, patch("streamlit.file_uploader", return_value=upload):
             app = AppTest.from_file(self.app_path, default_timeout=30).run()
             app.button[0].click().run()
             self.assertEqual(len(app.exception), 0)

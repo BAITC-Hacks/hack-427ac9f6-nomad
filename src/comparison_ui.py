@@ -1,5 +1,7 @@
 import streamlit as st
 
+from src.services.comparison import update_coverage
+from src.services.conclusion import build_conclusion
 from src.models import ComparisonResult, Document, ExtractionResult
 from src.ui_common import (
     UNIT_STATUS, FUNCTION_STATUS, RISK_LABEL, badge, evidence_pair, friendly_warning,
@@ -8,6 +10,7 @@ from src.ui_common import (
 
 def show_comparison(result: ComparisonResult, before: Document, after: Document,
                     before_result: ExtractionResult, after_result: ExtractionResult) -> None:
+    update_coverage(result, before_result.units, after_result.units)
     names = {u.id: u.name for u in before_result.units + after_result.units}
     def name(unit_id):
         return names.get(unit_id, "Не указано")
@@ -18,7 +21,12 @@ def show_comparison(result: ComparisonResult, before: Document, after: Document,
         st.warning(friendly_warning(warning))
     columns = st.columns(4)
     for column, status in zip(columns, ("CREATED", "PRESERVED", "TRANSFORMED", "DELETED")):
-        column.metric(UNIT_STATUS[status], sum(c.status == status for c in result.unit_changes))
+        column.metric(UNIT_STATUS[status], sum(c.status == status for c in result.unit_changes)
+                      if result.structure_complete or result.unit_changes else "—")
+    if not result.structure_complete:
+        st.caption(f"Сопоставлены подразделения: до — {result.before_units_covered} из {result.before_units_total}; "
+                   f"после — {result.after_units_covered} из {result.after_units_total}. "
+                   "Показаны только принятые результаты.")
     columns = st.columns(3)
     for column, kind, label in zip(columns,
             ("FUNCTION_LOSS", "DUPLICATION", "CONFLICT_OF_INTEREST"),
@@ -79,3 +87,8 @@ def show_comparison(result: ComparisonResult, before: Document, after: Document,
                 evidence_pair(before, after, finding.before_evidence_ids, finding.after_evidence_ids)
         if not result.findings:
             st.info("Подтверждённых гипотез не получено. Это не гарантирует отсутствия рисков.")
+
+    st.subheader("Итоговое аналитическое заключение")
+    for heading, text in build_conclusion(result):
+        st.markdown(f"**{heading}**")
+        st.write(friendly_warning(text))

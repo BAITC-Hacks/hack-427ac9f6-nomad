@@ -145,6 +145,40 @@ def refs(ids: list[str], chunks: list[SourceChunk]) -> list[str]:
     return list(dict.fromkeys(ref for ref in ids if ref in allowed))
 
 
+COVERAGE_WARNING = (
+    "Сопоставление организационной структуры выполнено не полностью. "
+    "Часть подразделений не удалось уверенно сопоставить. "
+    "Результаты требуют дополнительной проверки."
+)
+
+
+def update_coverage(result: ComparisonResult, before_units: list[OrgUnit],
+                    after_units: list[OrgUnit]) -> None:
+    """Measure accepted classifications only; never infer missing statuses."""
+    before_ids, after_ids = {u.id for u in before_units}, {u.id for u in after_units}
+    covered_before, covered_after = set(), set()
+    for item in result.unit_changes:
+        if item.status in ("PRESERVED", "TRANSFORMED", "DELETED"):
+            covered_before.add(item.before_unit)
+        if item.status in ("PRESERVED", "TRANSFORMED", "CREATED"):
+            covered_after.add(item.after_unit)
+    result.before_units_total, result.after_units_total = len(before_ids), len(after_ids)
+    result.before_units_covered = len(before_ids & covered_before)
+    result.after_units_covered = len(after_ids & covered_after)
+    result.structure_complete = bool(before_ids and after_ids) and (
+        before_ids <= covered_before and after_ids <= covered_after)
+    result.completed = result.completed and result.structure_complete
+    result.diagnostics = [d for d in getattr(result, "diagnostics", [])
+                          if d["code"] != "uncovered_unit"]
+    for side, missing in (("BEFORE", before_ids - covered_before),
+                          ("AFTER", after_ids - covered_after)):
+        result.diagnostics.extend(dict(code="uncovered_unit", side=side, unit_id=unit_id)
+                                  for unit_id in sorted(missing))
+    result.warnings = [w for w in result.warnings if w != COVERAGE_WARNING]
+    if not result.structure_complete:
+        result.warnings.append(COVERAGE_WARNING)
+
+
 def validate_core(output: CoreOutput, before_units: list[OrgUnit], after_units: list[OrgUnit],
                   before: list[SourceChunk], after: list[SourceChunk]) -> ComparisonResult:
     result = ComparisonResult()
@@ -152,6 +186,16 @@ def validate_core(output: CoreOutput, before_units: list[OrgUnit], after_units: 
     unit_seen = set()
     for item in output.unit_changes:
         item = item.model_copy(deep=True)
+        for side, unit_id, allowed in (("BEFORE", item.before_unit, bu),
+                                       ("AFTER", item.after_unit, au)):
+            if unit_id is not None and unit_id not in allowed:
+                result.diagnostics.append(dict(code="invalid_unit_id", side=side, unit_id=unit_id))
+        for side, ids, chunks in (("BEFORE", item.before_evidence_ids, before),
+                                  ("AFTER", item.after_evidence_ids, after)):
+            allowed_refs = {c.chunk_id for c in chunks}
+            for ref in ids:
+                if ref not in allowed_refs:
+                    result.diagnostics.append(dict(code="invalid_evidence_id", side=side, evidence_id=ref))
         item.before_evidence_ids = refs(item.before_evidence_ids, before)
         item.after_evidence_ids = refs(item.after_evidence_ids, after)
         valid = (
@@ -168,6 +212,7 @@ def validate_core(output: CoreOutput, before_units: list[OrgUnit], after_units: 
             unit_seen.add(key)
         elif not valid:
             result.discarded_items += 1
+            result.diagnostics.append(dict(code="invalid_status_evidence_combination", status=item.status))
     # Suppress a created/deleted claim when the same unit is explicitly matched.
     matched_before = {x.before_unit for x in result.unit_changes if x.after_unit and x.before_unit}
     matched_after = {x.after_unit for x in result.unit_changes if x.after_unit and x.before_unit}
@@ -193,6 +238,7 @@ def validate_core(output: CoreOutput, before_units: list[OrgUnit], after_units: 
         if previous is None or (previous.status == "POTENTIALLY_LOST" and item.status != "POTENTIALLY_LOST"):
             changes[key] = item
     result.responsibility_changes = list(changes.values())
+    update_coverage(result, before_units, after_units)
     return result
 
 
@@ -286,6 +332,7 @@ def compare_documents(before_doc: Document, after_doc: Document, before_result: 
                       after_result: ExtractionResult, settings: Settings,
                       progress: Callable[[str], None] | None = None) -> ComparisonResult:
     result = ComparisonResult()
+    update_coverage(result, before_result.units, after_result.units)
     if (before_result.document_id != before_doc.id or after_result.document_id != after_doc.id
             or before_doc.side != "BEFORE" or after_doc.side != "AFTER"):
         result.warnings.append("Документы и результаты извлечения не совпадают. Повторите извлечение.")
@@ -321,6 +368,7 @@ def compare_documents(before_doc: Document, after_doc: Document, before_result: 
                                      bu, au, before.chunks, after.chunks)
                 core_done = True
                 result.unit_changes = core.unit_changes
+                result.diagnostics = core.diagnostics
                 result.discarded_items += core.discarded_items
                 candidates = [c for c in core.responsibility_changes if c.status == "POTENTIALLY_LOST"]
                 result.responsibility_changes = [
@@ -351,5 +399,6 @@ def compare_documents(before_doc: Document, after_doc: Document, before_result: 
                 result.warnings.append("Анализ потенциальных дублей/конфликтов не завершился. Остальные результаты сохранены.")
     except errors:
         result.warnings.append("Не удалось запустить сравнение. Извлечённые данные сохранены.")
-    result.completed = core_done and risks_done and loss_done
+    update_coverage(result, bu, au)
+    result.completed = core_done and risks_done and loss_done and result.structure_complete
     return result

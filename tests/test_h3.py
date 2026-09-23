@@ -170,7 +170,7 @@ class PipelineTests(unittest.TestCase):
         payload = json.loads(client.responses.parse.call_args_list[0].kwargs["input"])
         self.assertIn("проверяет качество", payload["before"]["chunks"][0]["text"])
         self.assertEqual(client.responses.parse.call_count, 3)
-        self.assertTrue(result.completed)
+        self.assertFalse(result.completed)  # Empty structure is incomplete even when relocation succeeded.
 
     @patch("src.services.comparison.OpenAI")
     def test_optional_failure_keeps_core_results(self, factory):

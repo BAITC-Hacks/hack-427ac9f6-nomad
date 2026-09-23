@@ -4,10 +4,11 @@ from dataclasses import replace
 from unittest.mock import patch
 
 from src.config import Settings
-from src.models import ComparisonResult, ExtractionResult
+from src.models import ComparisonResult, ExtractionResult, OrgUnit
 from src.services import pipeline
 from src.ui_common import display_filename
 from test_h1 import word_bytes
+from test_p0 import successful_comparison
 
 
 class PipelineTests(unittest.TestCase):
@@ -17,9 +18,9 @@ class PipelineTests(unittest.TestCase):
         self.state = {}
         self.settings = Settings("test-only")
         self.extract_patch = patch("src.services.extraction.extract_document",
-                                  side_effect=lambda doc, settings: ExtractionResult(document_id=doc.id))
+                                  side_effect=lambda doc, settings: ExtractionResult(document_id=doc.id, units=[OrgUnit(doc.id, "Отдел", None, [doc.chunks[0].chunk_id])]))
         self.compare_patch = patch("src.services.comparison.compare_documents",
-                                  return_value=ComparisonResult(completed=True))
+                                  side_effect=successful_comparison)
         self.extract = self.extract_patch.start()
         self.compare = self.compare_patch.start()
         self.addCleanup(self.extract_patch.stop)
@@ -66,7 +67,9 @@ class PipelineTests(unittest.TestCase):
         self.compare.assert_not_called()
 
     def test_partial_comparison_retries_without_extraction(self):
-        self.compare.side_effect = [ComparisonResult(completed=False), ComparisonResult(completed=True)]
+        def compare_once_failed(*args, **kwargs):
+            return ComparisonResult() if self.compare.call_count == 1 else successful_comparison(*args, **kwargs)
+        self.compare.side_effect = compare_once_failed
         self.run_pipeline()
         self.assertFalse(self.state["_comparison_cache"])
         self.assertEqual(len(self.state["extractions"]), 2)
@@ -81,7 +84,7 @@ class PipelineTests(unittest.TestCase):
             self.run_pipeline()
         self.assertEqual(len(self.state["extractions"]), 2)
         self.assertFalse(self.state["_comparison_cache"])
-        self.compare.side_effect = None
+        self.compare.side_effect = successful_comparison
         self.run_pipeline()
         self.assertEqual(self.extract.call_count, 2)
 

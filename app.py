@@ -9,6 +9,17 @@ from src.comparison_ui import show_comparison
 from src.ui_common import SIDE, style_and_header, show_evidence, friendly_error, show_filename
 
 
+PARTIAL_COMPARISON_MESSAGE = (
+    "Сравнение выполнено частично. Часть изменений организационной структуры "
+    "не удалось уверенно сопоставить. Ниже представлены подтверждённые результаты. "
+    "Рекомендуется проверить неподтверждённые изменения по исходным документам."
+)
+LEGACY_PARTIAL_ERROR = (
+    "Не удалось полностью завершить сравнение. Анализ документов сохранён. "
+    "Нажмите «Провести анализ», чтобы повторить сравнение."
+)
+
+
 def clear_results() -> None:
     for key in ("documents", "extractions", "comparison", "run_error", "workflow_message"):
         st.session_state.pop(key, None)
@@ -77,10 +88,8 @@ def analyze(uploads) -> None:
                 status.update(label="Анализ завершён", state="complete", expanded=False)
                 st.session_state["workflow_message"] = "Анализ завершён. Сравнение завершено — результаты готовы."
             else:
-                status.update(label="Сравнение завершено не полностью", state="error")
-                st.session_state["run_error"] = (
-                    "Не удалось полностью завершить сравнение. Анализ документов сохранён. "
-                    "Нажмите «Провести анализ», чтобы повторить сравнение.")
+                status.update(label="Сравнение выполнено частично", state="complete", expanded=True)
+                st.warning(PARTIAL_COMPARISON_MESSAGE)
     except (ConfigurationError, DocumentParseError, ExtractionError) as exc:
         st.session_state["run_error"] = friendly_error(exc)
     except Exception:
@@ -97,6 +106,14 @@ def main() -> None:
         st.session_state.pop("extractions", None)
         st.session_state.pop("comparison", None)
         st.session_state["extraction_policy"] = "h2.3"
+    # Re-evaluate displayed session results too, including sessions opened before this fix.
+    if st.session_state.get("comparison") and st.session_state.get("extractions"):
+        from src.services.comparison import update_coverage
+        saved = st.session_state["comparison"]
+        extracted = st.session_state["extractions"]
+        update_coverage(saved, extracted["BEFORE"].units, extracted["AFTER"].units)
+        if not saved.completed:
+            st.session_state.pop("workflow_message", None)
     stage = 3 if st.session_state.get("comparison") else (2 if st.session_state.get("extractions") else 1)
     style_and_header(stage)
 
@@ -125,6 +142,13 @@ def main() -> None:
             analyze(uploads)
             st.rerun()
 
+    # Replace the old partial-result error in already-open sessions as well.
+    comparison = st.session_state.get("comparison")
+    if comparison and not comparison.completed:
+        if st.session_state.get("run_error") == LEGACY_PARTIAL_ERROR:
+            st.session_state.pop("run_error", None)
+        if not st.session_state.get("run_error"):
+            st.warning(PARTIAL_COMPARISON_MESSAGE)
     if st.session_state.get("run_error"):
         st.error(st.session_state["run_error"])
     if st.session_state.get("workflow_message"):

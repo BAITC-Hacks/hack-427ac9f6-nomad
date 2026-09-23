@@ -8,7 +8,7 @@ from src.parsers.parser_factory import parse_document
 from src.services import extraction, comparison
 
 ANALYSIS_VERSION = "extraction-2.3"
-COMPARISON_VERSION = "comparison-3"
+COMPARISON_VERSION = "comparison-3-coverage-1"
 ROOT = Path(__file__).resolve().parents[2]
 MAX_PAIRS = 3
 
@@ -69,6 +69,11 @@ def run_analysis(uploads, state, settings, progress=lambda message: None):
     state.pop("comparison", None)
     progress("Сравниваем изменения")
     if comparison_key in comparison_cache:
+        cached_comparison = comparison_cache[comparison_key]
+        comparison.update_coverage(cached_comparison, results["BEFORE"].units, results["AFTER"].units)
+        if not cached_comparison.completed:
+            del comparison_cache[comparison_key]
+    if comparison_key in comparison_cache:
         result = deepcopy(comparison_cache[comparison_key])
         progress("Формируем риски и рекомендации")
     else:
@@ -76,6 +81,7 @@ def run_analysis(uploads, state, settings, progress=lambda message: None):
             documents["BEFORE"], documents["AFTER"],
             results["BEFORE"], results["AFTER"], settings, progress=progress,
         )
+        comparison.update_coverage(result, results["BEFORE"].units, results["AFTER"].units)
         if result.completed:
             remember(comparison_cache, comparison_key, result)
     state["comparison"] = result
