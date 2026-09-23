@@ -3,156 +3,157 @@ import streamlit as st
 from src.config import ConfigurationError, load_settings
 from src.models import Document, ExtractionResult
 from src.parsers.parser_factory import DocumentParseError, parse_document
-from src.services.extraction import ExtractionError, extract_document, resolve_refs
-from src.services.comparison import compare_documents
+from src.services.extraction import ExtractionError
+from src.services.pipeline import run_analysis
 from src.comparison_ui import show_comparison
+from src.ui_common import SIDE, style_and_header, show_evidence, friendly_error, show_filename
 
 
 def clear_results() -> None:
-    st.session_state.pop("documents", None)
-    st.session_state.pop("extractions", None)
-    st.session_state.pop("comparison", None)
-
-
-def show_preview(document: Document) -> None:
-    st.subheader(document.side)
-    st.write(f"Filename: {document.filename}")
-    st.write(f"Total extracted chunks: {len(document.chunks)}")
-    for chunk in document.chunks[:5]:
-        with st.container(border=True):
-            st.code(chunk.chunk_id, language=None)
-            st.write(f"Page / locator: {chunk.locator}")
-            st.write(f"Section: {chunk.section or 'Not detected'}")
-            st.text(chunk.text)
-
-
-def show_sources(document: Document, refs: list[str]) -> None:
-    for chunk in resolve_refs(document, refs):
-        st.caption(
-            f"{chunk.chunk_id} | {chunk.filename} | {chunk.locator} | "
-            f"Section: {chunk.section or 'Not detected'}"
-        )
-        st.text(chunk.text)
+    for key in ("documents", "extractions", "comparison", "run_error", "workflow_message"):
+        st.session_state.pop(key, None)
 
 
 def show_extraction(document: Document, result: ExtractionResult) -> None:
-    st.subheader(f"{document.side} — Organizational Units")
-    unit_column, function_column = st.columns(2)
-    unit_column.metric(f"{document.side} units", len(result.units))
-    function_column.metric(f"{document.side} functions", len(result.functions))
-    st.caption("References checked against source chunks. AI interpretations still require review.")
-    if result.discarded_items or result.discarded_references:
-        st.warning(
-            f"Discarded references: {result.discarded_references}; "
-            f"items rejected by structural/ownership/evidence checks: {result.discarded_items}."
-        )
     if not result.units:
-        st.info("No organizational units with valid source references were extracted.")
+        st.info("Структурные подразделения с подтверждением в документе не найдены.")
     for unit in result.units:
         functions = [item for item in result.functions if item.unit_id == unit.id]
-        with st.container(border=True):
-            st.write(unit.name)
-            if unit.aliases:
-                st.caption("Aliases: " + ", ".join(unit.aliases))
+        with st.expander(f"{unit.name} · Функций: {len(functions)}", expanded=False):
             if unit.parent:
-                st.write(f"Parent: {unit.parent}")
-            st.write(f"Functions: {len(functions)}")
-            st.caption("Source references: " + ", ".join(unit.source_refs))
-            with st.expander("Unit source text"):
-                show_sources(document, unit.source_refs)
-            with st.expander(f"Functions ({len(functions)})"):
+                st.write(f"Вышестоящее подразделение: {unit.parent}")
+            if unit.aliases:
+                st.caption("Другие наименования: " + ", ".join(unit.aliases))
+            with st.expander("Показать подтверждение", expanded=False):
+                show_evidence(document, unit.source_refs, show_side=False)
+            with st.expander(f"Функции подразделения · {len(functions)}", expanded=False):
+                if not functions:
+                    st.caption("Отдельные функции не выделены. Сравнение также учитывает исходный текст документа.")
                 for function in functions:
                     st.write(function.text)
-                    show_sources(document, function.source_refs)
+                    with st.expander("Показать подтверждение", expanded=False):
+                        show_evidence(document, function.source_refs, show_side=False)
                     st.divider()
 
 
+def show_structures(documents, results) -> None:
+    before, after = st.columns(2)
+    for side, column, label in (("BEFORE", before, "Структура до"),
+                                ("AFTER", after, "Структура после")):
+        with column:
+            st.subheader(label)
+            show_extraction(documents[side], results[side])
+
+
+def request_run() -> None:
+    if not st.session_state.get("analysis_running"):
+        st.session_state["analysis_running"] = True
+        st.session_state["run_requested"] = True
+
+
+def analyze(uploads) -> None:
+    st.session_state.pop("run_error", None)
+    st.session_state.pop("workflow_message", None)
+    stages = ["Читаем документы", "Определяем структуру и функции",
+              "Сравниваем изменения", "Формируем риски и рекомендации"]
+    try:
+        if any(upload is None for upload in uploads.values()):
+            st.session_state["run_error"] = "Загрузите оба документа: до и после реорганизации."
+            return
+        inputs = {side: (upload.name, upload.getvalue()) for side, upload in uploads.items()}
+        with st.status("1. Читаем документы", expanded=True) as status:
+            def progress(message):
+                status.update(label=f"{stages.index(message) + 1}. {message}")
+            try:
+                settings = load_settings()
+            except ConfigurationError:
+                # Retain readable sources even when service access is not configured.
+                st.session_state["documents"] = {
+                    side: parse_document(data, name, side) for side, (name, data) in inputs.items()
+                }
+                raise
+            result = run_analysis(inputs, st.session_state, settings, progress)
+            if result.completed:
+                status.update(label="Анализ завершён", state="complete", expanded=False)
+                st.session_state["workflow_message"] = "Анализ завершён. Сравнение завершено — результаты готовы."
+            else:
+                status.update(label="Сравнение завершено не полностью", state="error")
+                st.session_state["run_error"] = (
+                    "Не удалось полностью завершить сравнение. Анализ документов сохранён. "
+                    "Нажмите «Провести анализ», чтобы повторить сравнение.")
+    except (ConfigurationError, DocumentParseError, ExtractionError) as exc:
+        st.session_state["run_error"] = friendly_error(exc)
+    except Exception:
+        st.session_state["run_error"] = (
+            "Не удалось завершить обработку. Уже выполненный анализ документов сохранён. "
+            "Повторите попытку кнопкой «Провести анализ».")
+    finally:
+        st.session_state["analysis_running"] = False
+
+
 def main() -> None:
-    st.set_page_config(page_title="AI Org Structure Analyzer", layout="wide")
+    st.set_page_config(page_title="ОргАналитик AI", layout="wide", initial_sidebar_state="collapsed")
     if st.session_state.get("extraction_policy") != "h2.3":
         st.session_state.pop("extractions", None)
         st.session_state.pop("comparison", None)
         st.session_state["extraction_policy"] = "h2.3"
-    st.title("AI Org Structure Analyzer")
-    st.caption("H2.3: validate organizational structure, then extract functions for those units.")
-    st.caption("Analyze documents sends extracted text to OpenAI. Each click starts a new API run.")
-    before_column, after_column = st.columns(2)
-    uploads = {}
-    for side, column in (("BEFORE", before_column), ("AFTER", after_column)):
-        with column:
-            st.subheader(side)
-            uploads[side] = st.file_uploader(
-                "Upload document", type=["pdf", "docx", "xlsx"],
-                key=f"upload_{side.lower()}", on_change=clear_results,
-                help="PDF, DOCX, or XLSX. Maximum 20 MB per file.",
-            )
-            if uploads[side] is not None:
-                st.write(f"Uploaded: {uploads[side].name}")
+    stage = 3 if st.session_state.get("comparison") else (2 if st.session_state.get("extractions") else 1)
+    style_and_header(stage)
 
-    if st.button("Analyze documents", type="primary"):
-        clear_results()
-        if any(upload is None for upload in uploads.values()):
-            st.error("Please upload both BEFORE and AFTER documents.")
-        else:
-            documents = {}
-            with st.spinner("Extracting document text..."):
-                for side, upload in uploads.items():
-                    try:
-                        documents[side] = parse_document(
-                            upload.getvalue(), upload.name, side,
-                        )
-                    except DocumentParseError as exc:
-                        st.error(f"{side} — {upload.name}: {exc}")
-            if len(documents) == 2:
-                st.session_state["documents"] = documents
-                try:
-                    settings = load_settings()
-                    results = {}
-                    with st.spinner("Extracting organizational units and functions..."):
-                        progress = st.empty()
-                        for side, document in documents.items():
-                            results[side] = extract_document(
-                                document, settings,
-                                progress=lambda done, total, side=side: progress.info(
-                                    f"{side}: batch {done}/{total} completed"
-                                ),
-                            )
-                        progress.empty()
-                    st.session_state["extractions"] = results
-                    st.success("Extraction complete. Review the original source references below.")
-                except (ConfigurationError, ExtractionError) as exc:
-                    st.error(str(exc))
+    with st.expander("Документы для анализа", expanded=not bool(st.session_state.get("comparison"))):
+        columns = st.columns(2, gap="large")
+        uploads = {}
+        for side, column in zip(("BEFORE", "AFTER"), columns):
+            with column:
+                with st.container(border=True):
+                    st.markdown(f"**{SIDE[side].upper()}**")
+                    uploads[side] = st.file_uploader(
+                        "Загрузить документ", type=["pdf", "docx", "xlsx"],
+                        key=f"upload_{side.lower()}", on_change=clear_results,
+                        help="PDF, DOCX или XLSX · до 20 МБ",
+                        disabled=bool(st.session_state.get("analysis_running")),
+                    )
+                    st.caption("PDF, DOCX или XLSX · до 20 МБ")
+                    upload = uploads[side]
+                    if upload is not None:
+                        size = len(upload.getvalue()) / (1024 * 1024)
+                        show_filename(upload.name, "✓ ")
+                        st.caption(f"✓ Размер: {size:.2f} МБ".replace(".", ","))
+        st.button("Провести анализ", type="primary", on_click=request_run,
+                  disabled=bool(st.session_state.get("analysis_running")))
+        if st.session_state.pop("run_requested", False):
+            analyze(uploads)
+            st.rerun()
+
+    if st.session_state.get("run_error"):
+        st.error(st.session_state["run_error"])
+    if st.session_state.get("workflow_message"):
+        st.success(st.session_state["workflow_message"])
 
     documents = st.session_state.get("documents")
-    if documents:
-        st.divider()
-        left, right = st.columns(2)
-        with left:
-            if results := st.session_state.get("extractions"):
-                show_extraction(documents["BEFORE"], results["BEFORE"])
-            show_preview(documents["BEFORE"])
-        with right:
-            if results := st.session_state.get("extractions"):
-                show_extraction(documents["AFTER"], results["AFTER"])
-            show_preview(documents["AFTER"])
-
-        if results := st.session_state.get("extractions"):
-            st.divider()
-            st.subheader("BEFORE → AFTER comparison")
-            st.caption("Сравнение читает исходные фрагменты и не зависит от полноты списка функций H2.")
-            if st.button("Compare documents", type="primary"):
-                st.session_state.pop("comparison", None)
-                try:
-                    with st.spinner("Сравнение структуры, обязанностей и потенциальных рисков..."):
-                        st.session_state["comparison"] = compare_documents(
-                            documents["BEFORE"], documents["AFTER"],
-                            results["BEFORE"], results["AFTER"], load_settings(),
-                        )
-                except ConfigurationError as exc:
-                    st.error(str(exc))
-            if comparison := st.session_state.get("comparison"):
-                show_comparison(comparison, documents["BEFORE"], documents["AFTER"],
-                                results["BEFORE"], results["AFTER"])
+    results = st.session_state.get("extractions")
+    if documents and results:
+        comparison = st.session_state.get("comparison")
+        if comparison:
+            show_comparison(comparison, documents["BEFORE"], documents["AFTER"],
+                            results["BEFORE"], results["AFTER"])
+            with st.expander("Структура и функции подразделений", expanded=False):
+                show_structures(documents, results)
+        else:
+            st.subheader("Документы готовы к сравнению")
+            columns = st.columns(4)
+            values = (
+                ("Подразделений до", len(results["BEFORE"].units)),
+                ("Подразделений после", len(results["AFTER"].units)),
+                ("Функций проанализировано", sum(len(r.functions) for r in results.values())),
+                ("Выявлено изменений", "—"),
+            )
+            for column, (label, value) in zip(columns, values):
+                column.metric(label, value)
+            st.caption("Нажмите «Провести анализ», чтобы завершить сравнение. Сохранённое извлечение будет использовано повторно.")
+            show_structures(documents, results)
+    elif documents:
+        st.info("Документы прочитаны. Завершите анализ, чтобы увидеть структуру и функции.")
 
 
 if __name__ == "__main__":

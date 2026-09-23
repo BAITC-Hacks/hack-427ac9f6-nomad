@@ -104,6 +104,7 @@ class Finding(ComparisonModel):
 
 @dataclass
 class ComparisonResult:
+    completed: bool = False
     unit_changes: list[UnitChange] = field(default_factory=list)
     responsibility_changes: list[ResponsibilityChange] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)

@@ -188,9 +188,10 @@ class H2AppTests(unittest.TestCase):
             app = AppTest.from_file(self.app_path, default_timeout=30).run()
             app.button[0].click().run()
         self.assertEqual(len(app.exception), 0)
-        self.assertIn("OPENAI_API_KEY", app.error[0].value)
+        self.assertIn("Доступ к сервису анализа не настроен", app.error[0].value)
         factory.assert_not_called()
-        self.assertEqual(len(app.code), 2)
+        self.assertEqual(len(app.code), 0)
+        self.assertEqual(len(app.session_state["documents"]), 2)
 
     @patch("src.services.extraction.OpenAI")
     @patch("src.config.dotenv_values", return_value={"OPENAI_API_KEY": "test-only"})
@@ -205,14 +206,20 @@ class H2AppTests(unittest.TestCase):
             chunks = payload if isinstance(payload, list) else payload["chunks"]
             return staged_response(output([chunks[0]["chunk_id"]]))(**kwargs)
         client.responses.parse.side_effect = respond
-        with patch("streamlit.file_uploader", return_value=upload):
+        from src.models import ComparisonResult
+        with patch("src.services.comparison.compare_documents", return_value=ComparisonResult(completed=True)) as compare, patch("streamlit.file_uploader", return_value=upload):
             app = AppTest.from_file(self.app_path, default_timeout=30).run()
             app.button[0].click().run()
             self.assertEqual(len(app.exception), 0)
-            self.assertEqual(len(app.metric), 4)
-            self.assertTrue(all(metric.value == "1" for metric in app.metric))
+            self.assertEqual(len(app.metric), 7)
+            self.assertEqual(len(app.session_state["extractions"]["BEFORE"].units), 1)
             self.assertTrue(any(item.value == "3.4. Alpha plans work." for item in app.text))
             app.run()  # Ordinary reruns must not incur new API calls.
+            app.button[0].click().run()  # Explicit repeat also uses the success cache.
+            self.assertFalse(app.exception)
+            self.assertTrue(app.session_state["comparison"].completed)
+            self.assertEqual(compare.call_count, 1)
+            self.assertEqual(len(app.button), 1)
         self.assertEqual(client.responses.parse.call_count, 4)
 
 

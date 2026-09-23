@@ -2,6 +2,7 @@
 import json
 from dataclasses import asdict, dataclass
 from typing import Literal
+from collections.abc import Callable
 
 from openai import OpenAI, OpenAIError
 from pydantic import Field, ValidationError
@@ -282,7 +283,8 @@ def call(client, settings, prompt, payload, schema):
 
 
 def compare_documents(before_doc: Document, after_doc: Document, before_result: ExtractionResult,
-                      after_result: ExtractionResult, settings: Settings) -> ComparisonResult:
+                      after_result: ExtractionResult, settings: Settings,
+                      progress: Callable[[str], None] | None = None) -> ComparisonResult:
     result = ComparisonResult()
     if (before_result.document_id != before_doc.id or after_result.document_id != after_doc.id
             or before_doc.side != "BEFORE" or after_doc.side != "AFTER"):
@@ -308,11 +310,16 @@ def compare_documents(before_doc: Document, after_doc: Document, before_result: 
         result.warnings.append("Контекст сравнения слишком большой. Используйте меньшие документы.")
         return result
     errors = (OpenAIError, ValidationError, ComparisonError)
+    core_done = risks_done = False
+    loss_done = True
     try:
         with OpenAI(api_key=settings.api_key, timeout=90.0, max_retries=1) as client:
             try:
+                if progress:
+                    progress("Сравниваем изменения")
                 core = validate_core(call(client, settings, CORE_PROMPT, payload, CoreOutput),
                                      bu, au, before.chunks, after.chunks)
+                core_done = True
                 result.unit_changes = core.unit_changes
                 result.discarded_items += core.discarded_items
                 candidates = [c for c in core.responsibility_changes if c.status == "POTENTIALLY_LOST"]
@@ -327,17 +334,22 @@ def compare_documents(before_doc: Document, after_doc: Document, before_result: 
                         review = call(client, settings, LOSS_PROMPT, review_payload, LossOutput)
                         apply_loss_review(result, review, candidates, au, after)
                     except errors:
+                        loss_done = False
                         result.warnings.append("Проверка переноса функций не завершилась; кандидаты на потерю скрыты.")
             except errors:
                 result.warnings.append("Основное сравнение не завершилось. Проверьте доступ к модели, квоту и сеть; "
                                        "извлечённые данные сохранены.")
             try:
+                if progress:
+                    progress("Формируем риски и рекомендации")
                 risks, discarded = validate_risks(
                     call(client, settings, RISK_PROMPT, payload["after"], RiskOutput), au, after.chunks)
                 result.findings.extend(risks)
                 result.discarded_items += discarded
+                risks_done = True
             except errors:
                 result.warnings.append("Анализ потенциальных дублей/конфликтов не завершился. Остальные результаты сохранены.")
     except errors:
         result.warnings.append("Не удалось запустить сравнение. Извлечённые данные сохранены.")
+    result.completed = core_done and risks_done and loss_done
     return result

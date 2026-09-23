@@ -103,10 +103,10 @@ class AppTests(unittest.TestCase):
     def test_start_and_missing_upload_message(self):
         self.app.run()
         self.assertEqual(len(self.app.exception), 0)
-        self.assertEqual(self.app.title[0].value, "AI Org Structure Analyzer")
+        self.assertEqual(self.app.title[0].value, "ОргАналитик AI")
         self.app.button[0].click().run()
         self.assertEqual(len(self.app.exception), 0)
-        self.assertIn("both BEFORE and AFTER", self.app.error[0].value)
+        self.assertIn("Загрузите оба документа", self.app.error[0].value)
 
     def test_preview_from_session_documents(self):
         data = word_bytes([f"3.{i} Department {i}" for i in range(1, 8)])
@@ -116,13 +116,11 @@ class AppTests(unittest.TestCase):
         }
         self.app.run()
         self.assertEqual(len(self.app.exception), 0)
-        self.assertEqual(len(self.app.code), 10)
-        self.assertEqual(self.app.code[0].value, "before_para0001")
-        self.assertEqual(self.app.code[5].value, "after_para0001")
-        self.assertTrue(any("Total extracted chunks: 7" in x.value
-                            for x in self.app.markdown))
+        self.assertEqual(len(self.app.code), 0)
+        self.assertEqual(len(self.app.text), 0)
+        self.assertEqual(len(self.app.session_state["documents"]["BEFORE"].chunks), 7)
+        self.assertIn("Документы прочитаны", self.app.info[0].value)
 
 
 if __name__ == "__main__":
     unittest.main()
-

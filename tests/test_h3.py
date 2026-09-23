@@ -170,6 +170,7 @@ class PipelineTests(unittest.TestCase):
         payload = json.loads(client.responses.parse.call_args_list[0].kwargs["input"])
         self.assertIn("проверяет качество", payload["before"]["chunks"][0]["text"])
         self.assertEqual(client.responses.parse.call_count, 3)
+        self.assertTrue(result.completed)
 
     @patch("src.services.comparison.OpenAI")
     def test_optional_failure_keeps_core_results(self, factory):
@@ -181,6 +182,7 @@ class PipelineTests(unittest.TestCase):
         result = compare_documents(b, a, be, ae, Settings("test-only"))
         self.assertEqual(len(result.responsibility_changes), 1)
         self.assertTrue(result.warnings)
+        self.assertFalse(result.completed)
         self.assertNotIn("private error", " ".join(result.warnings))
 
     @patch("src.services.comparison.OpenAI")
@@ -192,6 +194,7 @@ class PipelineTests(unittest.TestCase):
         result = compare_documents(b, a, be, ae, Settings("test-only"))
         self.assertEqual(len(result.findings), 1)
         self.assertTrue(result.warnings)
+        self.assertFalse(result.completed)
 
     @patch("src.services.comparison.OpenAI")
     def test_failed_loss_recheck_never_shows_loss(self, factory):
@@ -203,6 +206,7 @@ class PipelineTests(unittest.TestCase):
         result = compare_documents(b, a, be, ae, Settings("test-only"))
         self.assertEqual(result.responsibility_changes, [])
         self.assertEqual(result.findings, [])
+        self.assertFalse(result.completed)
 
     @patch("src.services.comparison.OpenAI")
     def test_mismatched_documents_never_call_api(self, factory):
@@ -211,6 +215,7 @@ class PipelineTests(unittest.TestCase):
         result = compare_documents(b, a, be, ae, Settings("test-only"))
         factory.assert_not_called()
         self.assertTrue(result.warnings)
+        self.assertFalse(result.completed)
 
     @patch("src.services.comparison.compare_documents")
     @patch("src.config.dotenv_values", return_value={"OPENAI_API_KEY": "test-only"})
@@ -221,10 +226,17 @@ class PipelineTests(unittest.TestCase):
         app.session_state["extraction_policy"] = "h2.3"
         app.session_state["documents"] = {"BEFORE": b, "AFTER": a}
         app.session_state["extractions"] = {"BEFORE": be, "AFTER": ae}
-        app.run()
-        app.button[1].click().run()
+        from io import BytesIO
+        from test_h1 import word_bytes
+        upload = BytesIO(word_bytes(["3.4. Department duties"]))
+        upload.name = "test.docx"
+        with patch("streamlit.file_uploader", return_value=upload), patch(
+                "src.services.extraction.extract_document", side_effect=[be, ae]):
+            app.run()
+            app.button[0].click().run()
         self.assertEqual(len(app.exception), 0)
-        self.assertEqual([tab.label for tab in app.tabs], ["OVERVIEW", "FUNCTION CHANGES", "FINDINGS"])
+        self.assertEqual([tab.label for tab in app.tabs],
+                         ["ОБЗОР ИЗМЕНЕНИЙ", "ИЗМЕНЕНИЯ ФУНКЦИЙ", "РИСКИ И РЕКОМЕНДАЦИИ"])
         self.assertEqual(app.session_state["extractions"]["AFTER"].units, ae.units)
         self.assertTrue(app.warning)
         app.run()

@@ -6,12 +6,18 @@ BEFORE and AFTER organizational documents, with traceable original evidence.
 ## Current functionality
 
 - Upload one BEFORE and one AFTER PDF, DOCX, or XLSX (20 MB maximum each).
-- Click **Analyze documents** to parse both documents and run AI extraction.
+- Click **Провести анализ** to parse both documents, extract units/functions,
+  and automatically compare changes and potential risks with visible progress.
 - View units, parent names when explicit, function counts, expandable functions,
   and source filenames, pages/locators, sections, and original extracted text.
-- Inspect the original H1 preview (total chunks and first five per document).
 - Results live only in Streamlit session state. Changing an upload clears them.
-  Ordinary UI reruns do not call the API; each Analyze click starts a fresh run.
+  Ordinary UI reruns do not call the API. Successful extraction and comparison
+  are cached separately for up to three document pairs in the current session.
+  Repeated analysis reuses these results without additional API calls.
+  Keys include both content hashes, original filenames, model, explicit versions
+  and processing-source fingerprints. Renaming files invalidates the cache to
+  preserve original filenames in evidence. Failures are not cached; comparison
+  retries reuse successful extraction. A new session/server restart clears cache.
 - A failed AI run leaves the source previews available, without presenting a
   partially processed document pair as a complete extraction.
 
@@ -83,7 +89,7 @@ Old session extraction results are cleared when the policy changes to H2.3.
 
 ## H3 comparison
 
-After extraction, click **Compare documents**. H3 compares validated units and
+Comparison starts automatically after extraction. H3 compares validated units and
 original source chunks directly, so incomplete H2 function lists do not block it.
 Two requests cover structure/responsibility changes and optional AFTER risks;
 a third request rechecks loss candidates across all AFTER units when necessary.
